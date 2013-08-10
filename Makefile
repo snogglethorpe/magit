@@ -1,91 +1,168 @@
-VERSION=$(shell git describe --tags --dirty)
-EMACS=emacs
-PREFIX=/usr/local
-SYSCONFDIR=/etc
-ELS=magit.el magit-svn.el magit-topgit.el magit-stgit.el magit-key-mode.el magit-bisect.el
-ELS_CONTRIB=contrib/magit-simple-keys.el contrib/magit-classic-theme.el
-ELCS=$(ELS:.el=.elc)
-ELCS_CONTRIB=$(ELS_CONTRIB:.el=.elc)
-DIST_FILES=$(ELS) Makefile magit.texi magit.info README.md magit.spec.in magit-pkg.el.in 50magit.el
-DIST_FILES_CONTRIB=$(ELS_CONTRIB) contrib/magit
-ELPA_FILES=$(ELS) magit.info magit-pkg.el
+PREFIX  ?= /usr/local
+lispdir ?= $(PREFIX)/share/emacs/site-lisp/magit
+infodir ?= $(PREFIX)/share/info
+execdir ?= $(PREFIX)/bin
 
-.PHONY=install
+LOADDEFS_FILE ?= magit-autoloads.el
+LOADDEFS_DIR  ?= $(lispdir)
 
-BATCH=$(EMACS) -batch -q -no-site-file -eval \
-  "(setq load-path (cons (expand-file-name \".\") load-path))"
+ELS  = magit.el
+ELS += magit-bisect.el
+ELS += magit-blame.el
+ELS += magit-cherry.el
+ELS += magit-compat.el
+ELS += magit-flow.el
+ELS += magit-key-mode.el
+ELS += magit-log-edit.el
+ELS += magit-stgit.el
+ELS += magit-svn.el
+ELS += magit-topgit.el
+ELS += magit-wip.el
+ELS += rebase-mode.el
+ELCS = $(ELS:.el=.elc)
+
+CP    ?= install -p -m 644
+CPBIN ?= install -p -m 755
+MKDIR ?= install -p -m 755 -d
+
+MAKEINFO     ?= makeinfo
+INSTALL_INFO ?= install-info
+
+EMACS ?= emacs
+BATCH  = $(EMACS) $(EFLAGS) -batch -Q -L .
+BATCHC = $(BATCH) -f batch-byte-compile
+
+VERSION=$(shell \
+  test -e .git && git describe --tags --dirty 2> /dev/null || \
+  $(BATCH) --eval "\
+(progn\
+  (require 'cl)\
+  (flet ((message (&rest _) _))\
+    (load-file \"magit-version.el\"))\
+  (princ magit-version))")
+
+.PHONY: clean magit-version.el
+.PHONY: install-lisp install-docs install-script
+.PHONY: melpa melpa-push
+
+lisp:     $(ELCS) magit-version.el loaddefs
+all:      lisp docs
+
+help:
+	$(info Getting Help)
+	$(info ============)
+	$(info )
+	$(info make help             - show brief help)
+	$(info )
+	$(info Build)
+	$(info =====)
+	$(info )
+	$(info make                  - build elisp files)
+	$(info make lisp             - ditto)
+	$(info make all              - build elisp files and documentation)
+	$(info make docs             - generate documentation)
+	$(info )
+	$(info Install)
+	$(info =======)
+	$(info )
+	$(info make install          - install elisp files and documentation)
+	$(info make install-lisp     - install elisp files)
+	$(info make install-docs     - install documentation)
+	$(info make install-script   - install shell script)
+	$(info make install-all      - install elisp files, script, and docs)
+	$(info )
+	$(info Test)
+	$(info ====)
+	$(info )
+	$(info make test             - run tests)
+	$(info )
+	$(info Release Managment)
+	$(info =================)
+	$(info )
+	$(info make dist             - create old-school tarball)
+	$(info make marmalade        - create marmalade tarball)
+	@echo ""
 
 %.elc: %.el
-	$(BATCH) --eval '(byte-compile-file "$<")'
+	@$(BATCHC) $<
 
-all: core docs contrib
+magit-version.el:
+	@printf "Generating magit-version.el\n"
+	@printf ";;; magit-version.el --- the Magit version you are using\n\n" > $@
+	@printf "(setq magit-version \""$(VERSION)"\")\n\n" >> $@
+	@printf "(provide 'magit-version)\n\n" >> $@
+	@printf ";; Local Variables:\n" >> $@
+	@printf ";; version-control: never\n" >> $@
+	@printf ";; no-byte-compile: t\n" >> $@
+	@printf ";; no-update-autoloads: t\n" >> $@
+	@printf ";; coding: utf-8\n" >> $@
+	@printf ";; End:\n" >> $@
+	@printf ";;; magit-version.el ends here\n" >> $@
 
-core: $(ELCS) magit.spec magit-pkg.el
+loaddefs: $(LOADDEFS_FILE)
 
-docs: magit.info
+$(LOADDEFS_FILE): $(ELS)
+	@$(BATCH) -eval "\
+(progn (defvar generated-autoload-file nil)\
+  (let ((generated-autoload-file \"$(CURDIR)/$(LOADDEFS_FILE)\")\
+        (make-backup-files nil))\
+    (update-directory-autoloads \".\")))"
 
-contrib: $(ELCS_CONTRIB)
+docs: magit.info dir
 
-magit.spec: magit.spec.in
-	sed -e s/@VERSION@/$(VERSION)/ < $< > $@
+%.info: %.texi
+	$(MAKEINFO) $< -o $@
 
-magit-pkg.el: magit-pkg.el.in
-	sed -e s/@VERSION@/$(VERSION)/ < $< > $@
+dir: magit.info
+	$(INSTALL_INFO) --dir=$@ $<
 
-magit.elc: magit.el
-	sed -e "s/@GIT_DEV_VERSION@/$(VERSION)/" < magit.el > magit.tmp.el #NO_DIST
-	$(BATCH) --eval '(byte-compile-file "magit.tmp.el")' #NO_DIST
-	mv magit.tmp.elc magit.elc #NO_DIST
-	rm magit.tmp.el #NO_DIST
-magit-key-mode.elc:
-magit-svn.elc:
-magit-topgit.elc:
-magit-stgit.elc:
-magit.info:
+install: install-lisp install-docs
+install-all: install install-script
+
+install-lisp: lisp
+	$(MKDIR) $(DESTDIR)$(lispdir)
+	$(CP) $(ELS) $(ELCS) magit-version.el $(DESTDIR)$(lispdir)
+	$(MKDIR) $(DESTDIR)$(LOADDEFS_DIR)
+	$(CP) $(LOADDEFS_FILE) $(DESTDIR)$(LOADDEFS_DIR)/$(LOADDEFS_FILE)
+
+install-docs: docs
+	$(MKDIR) $(DESTDIR)$(infodir)
+	$(CP) magit.info $(DESTDIR)$(infodir)
+	$(INSTALL_INFO) --info-dir=$(DESTDIR)$(infodir) $(DESTDIR)$(infodir)/magit.info
+
+install-script: bin/magit
+	$(MKDIR) $(DESTDIR)$(execdir)
+	$(CPBIN) bin/magit $(DESTDIR)$(execdir)
+
+test: $(ELCS)
+	@$(BATCH) -eval "(progn (require 'cl) \
+	(put 'flet 'byte-obsolete-info nil))" \
+	-l tests/magit-tests.el -f ert-run-tests-batch-and-exit
+
+clean:
+	rm -f $(ELCS) $(LOADDEFS_FILE) magit-version.el magit.info
+	rm -fr magit-$(VERSION) magit.spec *.tar.gz *.tar
+	test -e .git || rm -f magit.info
+
+DIST_FILES  = $(ELS) magit-version.el Makefile
+DIST_FILES += README.md INSTALL.md magit.texi magit.info dir
+DIST_FILES_BIN  = bin/magit
+
+ELPA_FILES = $(ELS) magit.info dir
 
 dist: magit-$(VERSION).tar.gz
 
-magit-$(VERSION).tar.gz: $(DIST_FILES) $(DIST_FILES_CONTRIB)
-	mkdir -p magit-$(VERSION)/contrib
-	cp --preserve=timestamps $(DIST_FILES) magit-$(VERSION)
-	cp --preserve=timestamps $(DIST_FILES_CONTRIB) magit-$(VERSION)/contrib
-	sed -i -e "1 s/=.*/=$(VERSION)/" magit-$(VERSION)/Makefile #NO_DIST
-	sed -i -e "/NO_DIST/d" magit-$(VERSION)/Makefile #NO_DIST
-	sed -i -e "s/@GIT_DEV_VERSION@/$(VERSION)/" magit-$(VERSION)/magit.el #NO_DIST
-	tar -cvzf magit-$(VERSION).tar.gz magit-$(VERSION)
+magit-$(VERSION).tar.gz: $(DIST_FILES)
+	$(MKDIR) magit-$(VERSION)/bin
+	$(CP) $(DIST_FILES) magit-$(VERSION)
+	$(CPBIN) $(DIST_FILES_BIN) magit-$(VERSION)/bin
+	tar -cvz --mtime=./magit-$(VERSION) -f magit-$(VERSION).tar.gz magit-$(VERSION)
 	rm -rf magit-$(VERSION)
 
-elpa: magit-$(VERSION).tar
+marmalade: magit-$(VERSION).tar
 
 magit-$(VERSION).tar: $(ELPA_FILES)
-	mkdir magit-$(VERSION)
-	cp --preserve=timestamps $(ELPA_FILES) magit-$(VERSION)
-	sed -i -e "s/@GIT_DEV_VERSION@/$(VERSION)/" magit-$(VERSION)/magit.el #NO_DIST
-	tar -cvf magit-$(VERSION).tar magit-$(VERSION)
+	$(MKDIR) magit-$(VERSION)
+	$(CP) $(ELPA_FILES) magit-$(VERSION)
+	tar -cv --mtime=./magit-$(VERSION) -f magit-$(VERSION).tar magit-$(VERSION)
 	rm -rf magit-$(VERSION)
-
-install: install_core install_docs
-
-install_core: core
-	mkdir -p $(DESTDIR)$(PREFIX)/share/emacs/site-lisp
-	install -m 644 $(ELS) $(ELCS) $(DESTDIR)$(PREFIX)/share/emacs/site-lisp
-	sed -i -e "s/@GIT_DEV_VERSION@/$(VERSION)/" $(DESTDIR)$(PREFIX)/share/emacs/site-lisp/magit.el #NO_DIST
-	mkdir -p $(DESTDIR)$(SYSCONFDIR)/emacs/site-start.d
-	install -m 644 50magit.el $(DESTDIR)$(SYSCONFDIR)/emacs/site-start.d/50magit.el
-
-install_docs: docs
-	mkdir -p $(DESTDIR)$(PREFIX)/share/info
-	install -m 644 magit.info $(DESTDIR)$(PREFIX)/share/info
-	install-info --info-dir=$(DESTDIR)$(PREFIX)/share/info $(DESTDIR)$(PREFIX)/share/info/magit.info
-
-install_contrib: contrib
-	mkdir -p $(DESTDIR)$(PREFIX)/share/emacs/site-lisp
-	install -m 644 $(ELS_CONTRIB) $(ELCS_CONTRIB) $(DESTDIR)$(PREFIX)/share/emacs/site-lisp
-	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	install -m 755 contrib/magit $(DESTDIR)$(PREFIX)/bin
-
-install_all: install install_contrib
-
-clean:
-	rm -f magit.info #NO_DIST
-	rm -fr magit-pkg.el magit.spec $(ELCS) $(ELCS_CONTRIB) *.tar.gz magit-$(VERSION)
